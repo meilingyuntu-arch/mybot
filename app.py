@@ -1,4 +1,5 @@
-import os, requests
+import os
+import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -6,7 +7,7 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 
-# 讀取環境變數
+# LINE Channel 環境變數
 LINE_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 
@@ -24,32 +25,42 @@ def home():
 def callback():
     signature = request.headers.get("X-Line-Signature")
     body = request.get_data(as_text=True)
-
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
-
     return "OK"
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     msg = event.message.text
+
+    query = {
+        "query": """
+        query($text: String!) {
+          ListArticles(filter: {text: $text}, first: 1) {
+            nodes {
+              text
+            }
+          }
+        }
+        """,
+        "variables": {"text": msg}
+    }
+
     try:
-        url = f'https://cofacts-api.g0v.tw/graphql?query={{ListArticles(filter:{{text:"{msg}"}},first:1){{nodes{{text}}}}}}'
-        res = requests.get(url, timeout=5).json()
+        res = requests.post(
+            "https://cofacts-api.g0v.tw/graphql",
+            json=query,
+            timeout=5
+        ).json()
         nodes = res.get("data", {}).get("ListArticles", {}).get("nodes")
         if nodes:
             reply = "🔍 查核提醒：此訊息在 Cofacts 有紀錄"
         else:
             reply = "✅ 查無此訊息的查核紀錄"
-    except Exception:
+    except Exception as e:
+        print("Cofacts API error:", e)
         reply = "❌ 查核服務暫時無法使用"
 
-    line_bot.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply)
-    )
-
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=8080)
+    line_bot.reply_message(event.reply_token, TextSendMessage(text=reply))
