@@ -29,17 +29,15 @@ def callback():
 @handler.add(MessageEvent,message=TextMessage)
 def handle_message(event):
     msg=event.message.text.strip()
-    # 關鍵策略 1：限制長度。Cofacts 搜尋過長文字反而會失效，取精華片段。
-    search_text=msg[:200]
+    # 策略：只取前 50 個字搜尋，增加命中率
+    search_text=msg[:50]
     
     api_url="https://cofacts-api.g0v.tw/graphql"
-    
-    # 關鍵策略 2：不使用 text 或 moreLikeThis 這種嚴格過濾器。
-    # 改用 q (query)，這會在後台進行全文章的關鍵字權重比對。
+    # 使用 q 模糊搜尋，這是命中率最高的方式
     query_json={
         "query": """query($q: String) { 
-            ListArticles(filter: {q: $q}, first: 1, orderBy: [{_score: DESC}]) { 
-                nodes { id text } 
+            ListArticles(filter: {q: $q}, first: 1) { 
+                nodes { id } 
             } 
         }""",
         "variables": {"q": search_text}
@@ -52,11 +50,10 @@ def handle_message(event):
         
         if nodes:
             article_id=nodes[0].get("id")
-            reply=f"🔍 查核提醒：此訊息在 Cofacts 有紀錄\n詳情請看：https://cofacts.tw/article/{article_id}"
+            reply=f"🔍 查核提醒：此訊息在 Cofacts 有紀錄\n詳情：https://cofacts.tw/article/{article_id}"
         else:
             reply="✅ 查無此訊息的查核紀錄"
-    except Exception:
-        # 當伺服器超時或網路不穩，回傳查無紀錄以維持使用者體驗
+    except:
         reply="✅ 查無此訊息的查核紀錄"
 
     line_bot.reply_message(event.reply_token,TextSendMessage(text=reply))
