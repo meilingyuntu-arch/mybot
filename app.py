@@ -1,17 +1,16 @@
-import os
-import requests
-from flask import Flask, request, abort, jsonify
+import os, requests
+from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 
-# 從 Render 環境變數取得
-LINE_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+# 從環境變數讀取金鑰
 LINE_SECRET = os.getenv("LINE_CHANNEL_SECRET")
+LINE_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 
-if not LINE_TOKEN or not LINE_SECRET:
+if not LINE_SECRET or not LINE_TOKEN:
     raise RuntimeError("❌ LINE env vars not set")
 
 line_bot = LineBotApi(LINE_TOKEN)
@@ -29,42 +28,56 @@ def callback():
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
+        # 當 LINE Verify 測試時可能觸發，回傳 400 是正常的
         abort(400)
 
     return "OK"
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    user_msg = event.message.text
-
-    # Cofacts 正確 POST 呼叫
-    graphql_query = {
+    msg = event.message.text
+    # 修正：使用 POST 方法呼叫 Cofacts API，避免中文亂碼與 URL 錯誤
+    api_url = "https://cofacts-api.g0v.tw/graphql"
+    
+    # GraphQL 查詢結構
+    query_json = {
         "query": """
-        query($text: String!) {
-          ListArticles(filter:{text:$text}, first:1) {
+        query($text: String) {
+          ListArticles(filter: {text: $text}, first: 1) {
             nodes {
               text
             }
           }
         }
         """,
-        "variables": {"text": user_msg}
+        "variables": {"text": msg}
     }
 
     try:
-        res = requests.post("https://cofacts-api.g0v.tw/graphql", json=graphql_query, timeout=5).json()
-        nodes = res.get("data", {}).get("ListArticles", {}).get("nodes")
-        if nodes:
-            reply = "🔍 查核提醒：此訊息在 Cofacts 有紀錄"
+        # 加上 Header 確保 API 辨識正確
+        headers = {"Content-Type": "application/json"}
+        res = requests.post(api_url, json=query_json, headers=headers, timeout=10)
+        
+        if res.status_code == 200:
+            data = res.json()
+            articles = data.get("data", {}).get("ListArticles", {}).get("nodes", [])
+            
+            if articles:
+                reply = "🔍 查核提醒：此訊息在 Cofacts 有紀錄"
+            else:
+                reply = "✅ 查無此訊息的查核紀錄"
         else:
-            reply = "✅ 查無此訊息的查核紀錄"
+            reply = "❌ 查核伺服器回應異常，請稍後再試"
+            
     except Exception as e:
+        print(f"Error: {e}")
         reply = "❌ 查核服務暫時無法使用"
 
+    # 回覆訊息給使用者
     line_bot.reply_message(
         event.reply_token,
         TextSendMessage(text=reply)
     )
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run()
